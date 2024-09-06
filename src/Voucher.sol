@@ -7,13 +7,15 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
+import {console} from "forge-std/console.sol";
+
 contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
     using MerkleProof for bytes32[];
 
     struct Issuance {
+        address owner;
         address erc20Address;
         string name;
-        bool isReused;
         uint256 totalCodeCount;
         uint256 claimAmountPerCode;
         uint256 claimFrequency;
@@ -36,10 +38,14 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
     mapping(uint256 issuanceIndex => uint256 claimedAmount)
         public claimedAmount;
 
+    mapping(address erc20Address => uint256[] issuanceIndexes)
+        public issuanceIndexesByErc20Address;
+
     event RegisterIssuance(
+        address owner,
+        address erc20Address,
         uint256 issuanceIndex,
         string name,
-        bool isResued,
         uint256 totalCodeCount,
         uint256 claimAmountPerCode,
         uint256 claimFrequency,
@@ -58,7 +64,6 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
     function registerIssuance(
         string memory _name,
         address _erc20Address,
-        bool _isReused,
         uint256 _totalCodeCount,
         uint256 _claimAmountPerCode,
         uint256 _claimFrequency,
@@ -68,23 +73,16 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         bytes32 _merkleRoot
     ) external {
         require(
-            (!_isReused &&
-                _totalCodeCount * _claimAmountPerCode == _totalIssuedAmount) ||
-                (_isReused && _totalCodeCount == 1),
-            "Invalid Params!"
-        );
-        require(_merkleRoot != bytes32(0), "Invalid marketRoot!");
-        require(
             _endTime > _startTime,
             "End time should be after than start time!"
         );
 
         Issuance storage issuance = issuances[totalIssuanceCount];
+        issuanceIndexesByErc20Address[_erc20Address].push(totalIssuanceCount);
         totalIssuanceCount++;
 
         issuance.erc20Address = _erc20Address;
         issuance.name = _name;
-        issuance.isReused = _isReused;
         issuance.totalCodeCount = _totalCodeCount;
         issuance.claimAmountPerCode = _claimAmountPerCode;
         issuance.claimFrequency = _claimFrequency;
@@ -100,9 +98,10 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         );
 
         emit RegisterIssuance(
+            msg.sender,
+            _erc20Address,
             totalIssuanceCount - 1,
             _name,
-            _isReused,
             _totalCodeCount,
             _claimAmountPerCode,
             _claimFrequency,
@@ -118,6 +117,8 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         string memory code,
         bytes32[] calldata proof
     ) external {
+        require(issuanceIndex < totalIssuanceCount, "Issuance not found!");
+
         Issuance memory issuance = issuances[issuanceIndex];
 
         require(
@@ -134,17 +135,6 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
             claimedAmount[issuanceIndex] <= issuance.totalIssuedAmount,
             "No more claimable amount!"
         );
-
-        claimCountPerUser[issuanceIndex][msg.sender]++;
-        claimedAmount[issuanceIndex] += issuance.claimAmountPerCode;
-
-        if (!issuance.isReused) {
-            require(
-                !isCodeUsed[issuanceIndex][code],
-                "Claim code already used!"
-            );
-            isCodeUsed[issuanceIndex][code] = true;
-        }
         require(
             proof.verify(
                 issuance.merkleRoot,
@@ -153,9 +143,29 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
             "Invalid claim proof!"
         );
 
-        //transfer(msg.sender, issuance.claimAmountPerCode);
+        claimCountPerUser[issuanceIndex][msg.sender]++;
+        claimedAmount[issuanceIndex] += issuance.claimAmountPerCode;
+
+        isCodeUsed[issuanceIndex][code] = true;
+
+        IERC20(issuance.erc20Address).transfer(
+            msg.sender,
+            issuance.claimAmountPerCode
+        );
 
         emit Claim(issuanceIndex, code);
+    }
+
+    function getIssuanceIndexesByErc20Address(
+        address _erc20Address
+    ) external view returns (uint256[] memory) {
+        return issuanceIndexesByErc20Address[_erc20Address];
+    }
+
+    function getIssuanceByIssuanceIndex(
+        uint256 issuanceIndex
+    ) external view returns (Issuance memory) {
+        return issuances[issuanceIndex];
     }
 
     function _authorizeUpgrade(
