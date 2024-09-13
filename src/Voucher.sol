@@ -91,6 +91,11 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         issuance.endTime = _endTime;
         issuance.merkleRoot = _merkleRoot;
 
+        require(
+            IERC20(_erc20Address).allowance(msg.sender, address(this)) >=
+                _totalIssuedAmount,
+            "Insufficient allowance"
+        );
         IERC20(_erc20Address).transferFrom(
             msg.sender,
             address(this),
