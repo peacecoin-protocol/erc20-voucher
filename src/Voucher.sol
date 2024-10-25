@@ -13,6 +13,7 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
     using MerkleProof for bytes32[];
 
     struct Issuance {
+        string issuanceId;
         address owner;
         address erc20Address;
         string name;
@@ -25,26 +26,24 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         bytes32 merkleRoot;
     }
 
-    uint256 public totalIssuanceCount;
-    // issuance issuanceIndex => issuance details
-    mapping(uint256 issuanceIndex => Issuance issuance) public issuances;
-    // issuance issuanceIndex => user => claim count
-    mapping(uint256 issuanceIndex => mapping(address user => uint256 claimCount))
+    // issuance issuanceId => issuance details
+    mapping(string issuanceId => Issuance issuance) public issuances;
+    // issuance issuanceId => user => claim count
+    mapping(string issuanceId => mapping(address user => uint256 claimCount))
         public claimCountPerUser;
-    // issuance issuanceIndex => issue code => used or not
-    mapping(uint256 issuanceIndex => mapping(string issueCode => bool isUsed))
+    // issuance issuanceId => issue code => used or not
+    mapping(string issuanceId => mapping(string issueCode => bool isUsed))
         public isCodeUsed;
-    // issuance issuanceIndex => claimed amount
-    mapping(uint256 issuanceIndex => uint256 claimedAmount)
-        public claimedAmount;
+    // issuance issuanceId => claimed amount
+    mapping(string issuanceId => uint256 claimedAmount) public claimedAmount;
 
-    mapping(address erc20Address => uint256[] issuanceIndexes)
-        public issuanceIndexesByErc20Address;
+    mapping(address erc20Address => string[] issuanceIds)
+        public issuanceIdsByErc20Address;
 
     event RegisterIssuance(
+        string issuanceId,
         address owner,
         address erc20Address,
-        uint256 issuanceIndex,
         string name,
         uint256 totalCodeCount,
         uint256 claimAmountPerCode,
@@ -55,13 +54,14 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         bytes32 merkleRoot
     );
 
-    event Claim(uint256 issuanceIndex, string code);
+    event Claim(string issuanceId, string code);
 
     function initialize() public initializer {
         __Ownable_init(msg.sender);
     }
 
     function registerIssuance(
+        string memory issuanceId,
         string memory _name,
         address _erc20Address,
         uint256 _totalCodeCount,
@@ -76,11 +76,15 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
             _endTime > _startTime,
             "End time should be after than start time!"
         );
+        require(
+            bytes(issuances[issuanceId].issuanceId).length == 0,
+            "Issuance ID already exists!"
+        );
 
-        Issuance storage issuance = issuances[totalIssuanceCount];
-        issuanceIndexesByErc20Address[_erc20Address].push(totalIssuanceCount);
-        totalIssuanceCount++;
+        Issuance storage issuance = issuances[issuanceId];
+        issuanceIdsByErc20Address[_erc20Address].push(issuanceId);
 
+        issuance.issuanceId = issuanceId;
         issuance.erc20Address = _erc20Address;
         issuance.name = _name;
         issuance.totalCodeCount = _totalCodeCount;
@@ -103,9 +107,9 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         );
 
         emit RegisterIssuance(
+            issuanceId,
             msg.sender,
             _erc20Address,
-            totalIssuanceCount - 1,
             _name,
             _totalCodeCount,
             _claimAmountPerCode,
@@ -118,13 +122,12 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
     }
 
     function claim(
-        uint256 issuanceIndex,
+        string memory issuanceId,
         string memory code,
         bytes32[] calldata proof
     ) external {
-        require(issuanceIndex < totalIssuanceCount, "Issuance not found!");
-
-        Issuance memory issuance = issuances[issuanceIndex];
+        Issuance memory issuance = issuances[issuanceId];
+        require(bytes(issuance.issuanceId).length != 0, "Issuance not found!");
 
         require(
             issuance.startTime < block.timestamp &&
@@ -132,12 +135,11 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
             "Issuance not started or already ended!"
         );
         require(
-            claimCountPerUser[issuanceIndex][msg.sender] <
-                issuance.claimFrequency,
+            claimCountPerUser[issuanceId][msg.sender] < issuance.claimFrequency,
             "Claim reached limitation!"
         );
         require(
-            claimedAmount[issuanceIndex] <= issuance.totalIssuedAmount,
+            claimedAmount[issuanceId] <= issuance.totalIssuedAmount,
             "No more claimable amount!"
         );
         require(
@@ -147,30 +149,36 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
             ),
             "Invalid claim proof!"
         );
+        require(!isCodeUsed[issuanceId][code], "Code already used!");
+        require(
+            IERC20(issuance.erc20Address).balanceOf(address(this)) >=
+                issuance.claimAmountPerCode,
+            "Insufficient balance"
+        );
 
-        claimCountPerUser[issuanceIndex][msg.sender]++;
-        claimedAmount[issuanceIndex] += issuance.claimAmountPerCode;
+        claimCountPerUser[issuanceId][msg.sender]++;
+        claimedAmount[issuanceId] += issuance.claimAmountPerCode;
 
-        isCodeUsed[issuanceIndex][code] = true;
+        isCodeUsed[issuanceId][code] = true;
 
         IERC20(issuance.erc20Address).transfer(
             msg.sender,
             issuance.claimAmountPerCode
         );
 
-        emit Claim(issuanceIndex, code);
+        emit Claim(issuanceId, code);
     }
 
-    function getIssuanceIndexesByErc20Address(
+    function getIssuanceIdsByErc20Address(
         address _erc20Address
-    ) external view returns (uint256[] memory) {
-        return issuanceIndexesByErc20Address[_erc20Address];
+    ) external view returns (string[] memory) {
+        return issuanceIdsByErc20Address[_erc20Address];
     }
 
-    function getIssuanceByIssuanceIndex(
-        uint256 issuanceIndex
+    function getIssuanceByIssuanceId(
+        string memory issuanceId
     ) external view returns (Issuance memory) {
-        return issuances[issuanceIndex];
+        return issuances[issuanceId];
     }
 
     function _authorizeUpgrade(
