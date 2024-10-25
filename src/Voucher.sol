@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC2612} from "@openzeppelin/contracts/interfaces/IERC2612.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -70,7 +71,11 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         uint256 _totalIssuedAmount,
         uint256 _startTime,
         uint256 _endTime,
-        bytes32 _merkleRoot
+        bytes32 _merkleRoot,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
     ) external {
         require(
             _endTime > _startTime,
@@ -94,6 +99,16 @@ contract Voucher is UUPSUpgradeable, Initializable, OwnableUpgradeable {
         issuance.startTime = _startTime;
         issuance.endTime = _endTime;
         issuance.merkleRoot = _merkleRoot;
+
+        IERC2612(_erc20Address).permit(
+            msg.sender,
+            address(this),
+            _totalIssuedAmount,
+            deadline,
+            v,
+            r,
+            s
+        );
 
         require(
             IERC20(_erc20Address).allowance(msg.sender, address(this)) >=
